@@ -10,6 +10,8 @@ import EX from "@/api/consts/exceptions.ts";
 import {createParser} from "eventsource-parser";
 import logger from "@/lib/logger.ts";
 import util from "@/lib/util.ts";
+import { AccountCredential } from "@/lib/account/types.ts";
+import { PreStreamError } from "@/api/controllers/account-runner.ts";
 
 // 模型名称
 const MODEL_NAME = "doubao";
@@ -19,12 +21,6 @@ const DEFAULT_ASSISTANT_ID = "497858";
 const VERSION_CODE = "20800";
 // PC版本（对齐网页端）
 const PC_VERSION = "2.44.0";
-// 设备ID（19位数字字符串）
-const DEVICE_ID = `7${util.generateRandomString({length: 18, charset: "numeric"})}`;
-// WebID（19位数字字符串）
-const WEB_ID = `7${util.generateRandomString({length: 18, charset: "numeric"})}`;
-// 用户ID
-const USER_ID = util.uuid(false);
 // 最大重试次数
 const MAX_RETRY_COUNT = 3;
 // 重试延迟
@@ -52,14 +48,13 @@ const FAKE_HEADERS = {
 const FILE_MAX_SIZE = 100 * 1024 * 1024;
 
 /**
- * 获取缓存中的access_token
+ * 由裸 token 构造临时账号凭据
  *
- * 目前doubao的access_token是固定的，暂无刷新功能
- *
- * @param refreshToken 用于刷新access_token的refresh_token
+ * 用于不经账号池、仅需一次性请求的场景(如 token 存活检测)。
  */
-async function acquireToken(refreshToken: string): Promise<string> {
-    return refreshToken;
+function buildTransientCredential(token: string): AccountCredential {
+    const gen = () => `7${util.generateRandomString({ length: 18, charset: "numeric" })}`;
+    return { token, deviceId: gen(), webId: gen() };
 }
 
 /**
@@ -103,14 +98,14 @@ function generateCookie(refreshToken: string) {
  * @param params 请求参数
  * @param headers 请求头
  */
-async function request(method: string, uri: string, refreshToken: string, options: AxiosRequestConfig = {}) {
-    const token = await acquireToken(refreshToken);
+async function request(method: string, uri: string, account: AccountCredential, options: AxiosRequestConfig = {}) {
+    const token = account.token;
     const response = await axios.request({
         method,
         url: `https://www.doubao.com${uri}`,
         params: {
             aid: DEFAULT_ASSISTANT_ID,
-            device_id: DEVICE_ID,
+            device_id: account.deviceId,
             device_platform: "web",
             language: "zh",
             pc_version: PC_VERSION,
@@ -119,10 +114,10 @@ async function request(method: string, uri: string, refreshToken: string, option
             region: "CN",
             samantha_web: 1,
             sys_region: "CN",
-            tea_uuid: WEB_ID,
+            tea_uuid: account.webId,
             "use-olympus-account": 1,
             version_code: VERSION_CODE,
-            web_id: WEB_ID,
+            web_id: account.webId,
             web_tab_id: util.uuid(),
             ...(options.params || {})
         },
@@ -147,11 +142,11 @@ async function request(method: string, uri: string, refreshToken: string, option
  *
  * 在对话流传输完毕后移除会话，避免创建的会话出现在用户的对话列表中
  *
- * @param refreshToken 用于刷新access_token的refresh_token
+ * @param account 账号凭据(token + 设备指纹)
  */
 async function removeConversation(
     convId: string,
-    refreshToken: string
+    account: AccountCredential
 ) {
     try {
         const params = {
@@ -166,7 +161,7 @@ async function removeConversation(
             "Sec-Ch-Ua": "\"Not;A=Brand\";v=\"99\", \"Google Chrome\";v=\"139\", \"Chromium\";v=\"139\""
         };
 
-        await request("POST", "/samantha/thread/delete", refreshToken, {
+        await request("POST", "/samantha/thread/delete", account, {
             data: {
                 conversation_id: convId
             },
@@ -185,13 +180,13 @@ async function removeConversation(
  * 同步对话补全
  *
  * @param messages 参考gpt系列消息格式，多轮对话请完整提供上下文
- * @param refreshToken 用于刷新access_token的refresh_token
+ * @param account 账号凭据(token + 设备指纹)
  * @param assistantId 智能体ID，默认使用Doubao原版
  * @param retryCount 重试次数
  */
 async function createCompletion(
     messages: any[],
-    refreshToken: string,
+    account: AccountCredential,
     assistantId = DEFAULT_ASSISTANT_ID,
     refConvId = "",
     retryCount = 0,
@@ -204,13 +199,13 @@ async function createCompletion(
         const refFileUrls = extractRefFileUrls(messages);
         const refs = refFileUrls.length
             ? await Promise.all(
-                refFileUrls.map((fileUrl) => uploadFile(fileUrl, refreshToken))
+                refFileUrls.map((fileUrl) => uploadFile(fileUrl, account))
             )
             : [];
 
         if (!/[0-9a-zA-Z]{24}/.test(refConvId)) refConvId = "";
 
-        const response = await request("post", "/samantha/chat/completion", refreshToken, {
+        const response = await request("post", "/samantha/chat/completion", account, {
             data: {
                 messages: messagesPrepare(messages, refs, !!refConvId),
                 completion_option: {
@@ -255,7 +250,7 @@ async function createCompletion(
             `Stream has completed transfer ${util.timestamp() - streamStartTime}ms`
         );
 
-        removeConversation(answer.id, refreshToken).catch(
+        removeConversation(answer.id, account).catch(
             (err) => !refConvId && console.error('移除会话失败：', err)
         );
 
@@ -268,7 +263,7 @@ async function createCompletion(
                 await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY));
                 return createCompletion(
                     messages,
-                    refreshToken,
+                    account,
                     assistantId,
                     refConvId,
                     retryCount + 1,
@@ -285,18 +280,19 @@ async function createCompletion(
  * 流式对话补全
  *
  * @param messages 参考gpt系列消息格式，多轮对话请完整提供上下文
- * @param refreshToken 用于刷新access_token的refresh_token
+ * @param account 账号凭据(token + 设备指纹)
  * @param assistantId 智能体ID，默认使用Doubao原版
  * @param retryCount 重试次数
  */
 async function createCompletionStream(
     messages: any[],
-    refreshToken: string,
+    account: AccountCredential,
     assistantId = DEFAULT_ASSISTANT_ID,
     refConvId = "",
     retryCount = 0,
     useDeepThink = false,
-    useAutoCot = false
+    useAutoCot = false,
+    onEnd?: (code: number) => void
 ) {
     return (async () => {
         logger.info(`收到 ${messages.length} 条消息（流式）${useDeepThink ? " [深度思考]" : ""}${useAutoCot ? " [自动CoT]" : ""}`);
@@ -304,13 +300,13 @@ async function createCompletionStream(
         const refFileUrls = extractRefFileUrls(messages);
         const refs = refFileUrls.length
             ? await Promise.all(
-                refFileUrls.map((fileUrl) => uploadFile(fileUrl, refreshToken))
+                refFileUrls.map((fileUrl) => uploadFile(fileUrl, account))
             )
             : [];
 
         if (!/[0-9a-zA-Z]{24}/.test(refConvId)) refConvId = "";
 
-        const response = await request("post", "/samantha/chat/completion", refreshToken, {
+        const response = await request("post", "/samantha/chat/completion", account, {
             data: {
                 messages: messagesPrepare(messages, refs, !!refConvId),
                 completion_option: {
@@ -348,39 +344,25 @@ async function createCompletionStream(
                 response.headers["content-type"]
             );
             response.data.on("data", (buffer) => logger.error(buffer.toString()));
-            const transStream = new PassThrough();
-            transStream.end(
-                `data: ${JSON.stringify({
-                    id: "",
-                    model: MODEL_NAME,
-                    object: "chat.completion.chunk",
-                    choices: [
-                        {
-                            index: 0,
-                            delta: {
-                                role: "assistant",
-                                content: "服务暂时不可用，第三方响应错误",
-                            },
-                            finish_reason: "stop",
-                        },
-                    ],
-                    usage: {prompt_tokens: 1, completion_tokens: 1, total_tokens: 2},
-                    created: util.unixTimestamp(),
-                })}\n\n`
+            // 推流前硬失败：抛出供路由层换号重试
+            throw new PreStreamError(
+                `Stream response Content-Type invalid: ${response.headers["content-type"]}`
             );
-            return transStream;
         }
 
         const streamStartTime = util.timestamp();
-        return createTransStream(response.data, (convId: string) => {
+        return createTransStream(response.data, (convId: string, code: number) => {
             logger.success(
                 `Stream has completed transfer ${util.timestamp() - streamStartTime}ms`
             );
-            removeConversation(convId, refreshToken).catch(
+            removeConversation(convId, account).catch(
                 (err) => !refConvId && console.error(err)
             );
+            onEnd && onEnd(code);
         });
     })().catch((err) => {
+        // 推流前失败交由路由层换号，不在此处内部重试
+        if (err instanceof PreStreamError) throw err;
         if (retryCount < MAX_RETRY_COUNT) {
             logger.error(`Stream response error: ${err.stack}`);
             logger.warn(`Try again after ${RETRY_DELAY / 1000}s...`);
@@ -388,12 +370,13 @@ async function createCompletionStream(
                 await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY));
                 return createCompletionStream(
                     messages,
-                    refreshToken,
+                    account,
                     assistantId,
                     refConvId,
                     retryCount + 1,
                     useDeepThink,
-                    useAutoCot
+                    useAutoCot,
+                    onEnd
                 );
             })();
         }
@@ -791,8 +774,8 @@ function buildAuthorization(
     return {authorization, amzDate, payloadHash};
 }
 
-async function acquireUploadAuth(refreshToken: string, resourceType: number) {
-    const data: any = await request("post", "/alice/resource/prepare_upload", refreshToken, {
+async function acquireUploadAuth(account: AccountCredential, resourceType: number) {
+    const data: any = await request("post", "/alice/resource/prepare_upload", account, {
         data: {tenant_id: "5", scene_id: "5", resource_type: resourceType},
         headers: {"agw-js-conv": "str"},
     });
@@ -1034,12 +1017,12 @@ async function commitImageUpload(
  * 上传文件
  *
  * @param fileUrl 文件URL
- * @param refreshToken 用于刷新access_token的refresh_token
+ * @param account 账号凭据(token + 设备指纹)
  * @param isVideoImage 是否是用于视频图像
  */
 async function uploadFile(
     fileUrl: string,
-    refreshToken: string,
+    account: AccountCredential,
     isVideoImage: boolean = false
 ) {
     await checkFileUrl(fileUrl);
@@ -1068,7 +1051,7 @@ async function uploadFile(
     const ext = (extFromMime || path.extname(filename).replace(/^\./, "") || (mime.getExtension(mimeType) || "bin")).toLowerCase();
 
     try {
-        const auth = await acquireUploadAuth(refreshToken, isImage ? 2 : 1);
+        const auth = await acquireUploadAuth(account, isImage ? 2 : 1);
         logger.info(`STS acquired for ${isImage ? "image" : "file"}`);
 
         const apply = await applyImageUpload(
@@ -1439,7 +1422,7 @@ function createTransStream(stream: any, endCallback?: Function) {
         if (code !== 0) chunk.message = message;
         !transStream.closed && transStream.write(`data: ${JSON.stringify(chunk)}\n\n`);
         !transStream.closed && transStream.end("data: [DONE]\n\n");
-        endCallback && endCallback(convId);
+        endCallback && endCallback(convId, code);
     };
     !transStream.closed &&
     transStream.write(
@@ -1602,7 +1585,7 @@ function tokenSplit(authorization: string) {
  * 获取Token存活状态
  */
 async function getTokenLiveStatus(refreshToken: string) {
-    const result = await request("POST", "/passport/account/info/v2", refreshToken, {
+    const result = await request("POST", "/passport/account/info/v2", buildTransientCredential(refreshToken), {
         params: {
             account_sdk_source: "web"
         }
