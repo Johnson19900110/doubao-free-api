@@ -4,3 +4,4 @@ logs/
 .vercel
 .DS_Store
 scripts/
+.env

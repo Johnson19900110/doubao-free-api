@@ -89,12 +89,16 @@ Authorization: Bearer <apiToken>
 | `maxFailover` | 单次请求最大换号重试次数 | `3` |
 | `fingerprintStore` | 设备指纹持久化文件路径 | `./data/fingerprints.json` |
 
-**凭据安全**：`apiUrl` / `apiToken` 支持环境变量覆盖且优先级更高，**请勿在 `account.yml` 中硬编码真实 token**：
+**凭据安全**：`apiUrl` / `apiToken` 支持环境变量覆盖且优先级更高，**请勿在 `account.yml` 中硬编码真实 token**（保持 `apiToken: ''`）。推荐用 `.env` 注入——复制 `.env.example` 为 `.env` 并填值即可，`npm start` / `npm run dev` 会通过 `--env-file-if-exists=.env` 自动加载（`.env` 已被 `.gitignore` 忽略，不会入库）：
 
 ```shell
-export DOUBAO_POOL_API_URL=http://10.0.8.73:8090/api/v1/external/doubao/logins
-export DOUBAO_POOL_API_TOKEN=<你的账号接口token>
+cp .env.example .env
+# 编辑 .env：
+# DOUBAO_POOL_API_URL=http://...
+# DOUBAO_POOL_API_TOKEN=<你的账号接口token>
 ```
+
+Docker / 生产环境也可直接用 `-e DOUBAO_POOL_API_TOKEN=...` 或编排文件的 `environment:` 注入。
 
 **设备指纹**：每个账号的 `DEVICE_ID` / `WEB_ID` 在首次出现时生成并持久化到 `fingerprintStore`（默认 `./data/fingerprints.json`），重启后保持稳定；新账号实时补建。该目录下的运行时数据已被 `.gitignore` 忽略。
 
