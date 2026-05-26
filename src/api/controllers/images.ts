@@ -11,7 +11,13 @@ import {createParser} from "eventsource-parser";
 import logger from "@/lib/logger.ts";
 import util from "@/lib/util.ts";
 import {AccountCredential} from "@/lib/account/types.ts";
+import {buildTransientCredential} from "@/lib/account/transient-credential.ts";
 import {PreStreamError} from "@/api/controllers/account-runner.ts";
+import {
+    EMPTY_RESULT_CODE,
+    EMPTY_RESULT_MESSAGE,
+    parseUpstreamError,
+} from "@/lib/doubao/upstream-error.ts";
 
 // 模型名称
 const MODEL_NAME = "doubao";
@@ -46,16 +52,6 @@ const FAKE_HEADERS = {
 };
 // 文件最大大小
 const FILE_MAX_SIZE = 100 * 1024 * 1024;
-
-/**
- * 由裸 token 构造临时账号凭据
- *
- * 用于不经账号池、仅需一次性请求的场景(如 token 存活检测)。
- */
-function buildTransientCredential(token: string): AccountCredential {
-    const gen = () => `7${util.generateRandomString({length: 18, charset: "numeric"})}`;
-    return {token, deviceId: gen(), webId: gen()};
-}
 
 /**
  * 生成伪msToken
@@ -944,10 +940,12 @@ async function receiveStream(stream: any): Promise<any> {
     const imageUrls: string[] = [];
     const emittedImageKeys = new Set<string>();
     return new Promise((resolve, reject) => {
-        const data = {
+        const data: any = {
             id: "",
             model: MODEL_NAME,
             object: "chat.completion",
+            // 0 表示正常；非 0 为豆包上游错误码（如限流 710022002）或空结果码
+            code: 0,
             choices: [
                 {
                     index: 0,
@@ -966,6 +964,11 @@ async function receiveStream(stream: any): Promise<any> {
         const finalize = () => {
             data.choices[0].message.content = data.choices[0].message.content.replace(/\n$/, "");
             data.choices[0].message.images = imageUrls;
+            // 豆包未返回任何内容且无上游错误码时，透出空结果码
+            if (data.code === 0 && !data.choices[0].message.content && imageUrls.length === 0) {
+                data.code = EMPTY_RESULT_CODE;
+                data.message = EMPTY_RESULT_MESSAGE;
+            }
         };
         const parser = createParser((event) => {
             try {
@@ -973,8 +976,16 @@ async function receiveStream(stream: any): Promise<any> {
                 const rawResult = _.attempt(() => JSON.parse(event.data));
                 if (_.isError(rawResult))
                     throw new Error(`Stream response invalid: ${event.data}`);
-                if (rawResult.code)
-                    throw new APIException(EX.API_REQUEST_FAILED, `[请求doubao失败]: ${rawResult.code}-${rawResult.message}`);
+                // 上游错误（限流/拦截等）不抛异常，而是把 code 透传到响应最外层
+                const upstreamErr = parseUpstreamError(rawResult);
+                if (upstreamErr) {
+                    logger.warn(`[upstream] doubao 返回错误码 ${upstreamErr.code}: ${upstreamErr.message}`);
+                    data.code = upstreamErr.code;
+                    data.message = upstreamErr.message;
+                    isEnd = true;
+                    finalize();
+                    return resolve(data);
+                }
                 if (rawResult.event_type == 2003) {
                     isEnd = true;
                     finalize();
@@ -1062,6 +1073,37 @@ function createTransStream(stream: any, endCallback?: Function) {
     const emittedImageKeys = new Set<string>();
     // 创建转换流
     const transStream = new PassThrough();
+    // 是否产出过任何内容（图片提示/图片/文本），用于判断豆包是否空返回
+    let anyContent = false;
+    let finished = false;
+    /**
+     * 结束流：透出 code（0 正常；非 0 为豆包上游错误码或空结果码）后收尾
+     * 幂等：正常 finish 与 error/close 兜底只会真正执行一次，保证 endCallback 恰好触发一次
+     */
+    const finish = (code = 0, message = "") => {
+        if (finished) return;
+        finished = true;
+        if (code === 0 && !anyContent) {
+            code = EMPTY_RESULT_CODE;
+            message = EMPTY_RESULT_MESSAGE;
+        }
+        if (code !== 0)
+            logger.warn(`[upstream] doubao 流式返回错误码 ${code}: ${message}`);
+        const chunk: any = {
+            id: convId,
+            model: MODEL_NAME,
+            object: "chat.completion.chunk",
+            code,
+            choices: [
+                {index: 0, delta: {role: "assistant", content: ""}, finish_reason: "stop"},
+            ],
+            created,
+        };
+        if (code !== 0) chunk.message = message;
+        !transStream.closed && transStream.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        !transStream.closed && transStream.end("data: [DONE]\n\n");
+        endCallback && endCallback(convId, code);
+    };
     !transStream.closed &&
     transStream.write(
         `data: ${JSON.stringify({
@@ -1085,26 +1127,12 @@ function createTransStream(stream: any, endCallback?: Function) {
             const rawResult = _.attempt(() => JSON.parse(event.data));
             if (_.isError(rawResult))
                 throw new Error(`Stream response invalid: ${event.data}`);
-            if (rawResult.code)
-                throw new APIException(EX.API_REQUEST_FAILED, `[请求doubao失败]: ${rawResult.code}-${rawResult.message}`);
-            if (rawResult.event_type == 2003) {
-                transStream.write(`data: ${JSON.stringify({
-                    id: convId,
-                    model: MODEL_NAME,
-                    object: "chat.completion.chunk",
-                    choices: [
-                        {
-                            index: 0,
-                            delta: {role: "assistant", content: ""},
-                            finish_reason: "stop"
-                        },
-                    ],
-                    created,
-                })}\n\n`);
-                !transStream.closed && transStream.end("data: [DONE]\n\n");
-                endCallback && endCallback(convId, 0);
-                return;
-            }
+            // 上游错误（限流/拦截等）不抛异常，而是把 code 透传到最终 chunk 后收尾
+            const upstreamErr = parseUpstreamError(rawResult);
+            if (upstreamErr)
+                return finish(upstreamErr.code, upstreamErr.message);
+            if (rawResult.event_type == 2003)
+                return finish();
             if (rawResult.event_type != 2001) {
                 return;
             }
@@ -1113,24 +1141,8 @@ function createTransStream(stream: any, endCallback?: Function) {
                 throw new Error(`Stream response invalid: ${rawResult.event_data}`);
             if (!convId)
                 convId = result.conversation_id;
-            if (result.is_finish) {
-                transStream.write(`data: ${JSON.stringify({
-                    id: convId,
-                    model: MODEL_NAME,
-                    object: "chat.completion.chunk",
-                    choices: [
-                        {
-                            index: 0,
-                            delta: {role: "assistant", content: ""},
-                            finish_reason: "stop"
-                        },
-                    ],
-                    created,
-                })}\n\n`);
-                !transStream.closed && transStream.end("data: [DONE]\n\n");
-                endCallback && endCallback(convId, 0);
-                return;
-            }
+            if (result.is_finish)
+                return finish();
             const message = result.message;
             if (!message || !message.content)
                 return;
@@ -1158,6 +1170,7 @@ function createTransStream(stream: any, endCallback?: Function) {
                         created,
                     })}\n\n`);
                     imageNoticeSent = true;
+                    anyContent = true;
                 }
                 for (const c of creations) {
                     const img = c?.image || {};
@@ -1166,6 +1179,7 @@ function createTransStream(stream: any, endCallback?: Function) {
                     const ori = img?.image_ori?.url || url;
                     if (key && url && !emittedImageKeys.has(key)) {
                         emittedImageKeys.add(key);
+                        anyContent = true;
                         const md = `${ori}\n`;
                         transStream.write(`data: ${JSON.stringify({
                             id: convId,
@@ -1194,6 +1208,7 @@ function createTransStream(stream: any, endCallback?: Function) {
                 text = message.content;
             }
             if (text) {
+                anyContent = true;
                 transStream.write(`data: ${JSON.stringify({
                     id: convId,
                     model: MODEL_NAME,
@@ -1210,7 +1225,7 @@ function createTransStream(stream: any, endCallback?: Function) {
             }
         } catch (err) {
             logger.error(err);
-            !transStream.closed && transStream.end("\n\n");
+            finish(EX.API_REQUEST_FAILED[0] as number, "stream parse error");
         }
     });
     stream.on("data", (buffer) => {
@@ -1224,14 +1239,8 @@ function createTransStream(stream: any, endCallback?: Function) {
         }
         parser.feed(buffer.toString());
     });
-    stream.once(
-        "error",
-        () => !transStream.closed && transStream.end("data: [DONE]\n\n")
-    );
-    stream.once(
-        "close",
-        () => !transStream.closed && transStream.end("data: [DONE]\n\n")
-    );
+    stream.once("error", () => finish(EX.API_REQUEST_FAILED[0] as number, "stream error"));
+    stream.once("close", () => finish());
     return transStream;
 }
 

@@ -11,7 +11,13 @@ import {createParser} from "eventsource-parser";
 import logger from "@/lib/logger.ts";
 import util from "@/lib/util.ts";
 import { AccountCredential } from "@/lib/account/types.ts";
+import { buildTransientCredential } from "@/lib/account/transient-credential.ts";
 import { PreStreamError } from "@/api/controllers/account-runner.ts";
+import {
+    EMPTY_RESULT_CODE,
+    EMPTY_RESULT_MESSAGE,
+    parseUpstreamError,
+} from "@/lib/doubao/upstream-error.ts";
 
 // 模型名称
 const MODEL_NAME = "doubao";
@@ -46,16 +52,6 @@ const FAKE_HEADERS = {
 };
 // 文件最大大小
 const FILE_MAX_SIZE = 100 * 1024 * 1024;
-
-/**
- * 由裸 token 构造临时账号凭据
- *
- * 用于不经账号池、仅需一次性请求的场景(如 token 存活检测)。
- */
-function buildTransientCredential(token: string): AccountCredential {
-    const gen = () => `7${util.generateRandomString({ length: 18, charset: "numeric" })}`;
-    return { token, deviceId: gen(), webId: gen() };
-}
 
 /**
  * 生成伪msToken
@@ -1177,31 +1173,6 @@ function collectReferencesFromMessage(
 }
 
 // 豆包未返回任何内容时使用的错误码
-const EMPTY_RESULT_CODE = -2009;
-const EMPTY_RESULT_MESSAGE = "doubao未返回任何内容";
-
-/**
- * 解析豆包上游错误帧
- *
- * 错误码可能位于最外层 rawResult.code，或 event_type 2005 错误帧的 event_data 内层
- * （如限流 710022002）。命中则返回 { code, message }，否则返回 null。
- *
- * @param rawResult 解析后的 SSE data 帧
- */
-function parseUpstreamError(rawResult: any): { code: number; message: string } | null {
-    if (rawResult && _.isFinite(rawResult.code) && rawResult.code !== 0)
-        return { code: rawResult.code, message: rawResult.message || "" };
-    if (rawResult && rawResult.event_type === 2005) {
-        const info = _.attempt(() =>
-            typeof rawResult.event_data === "string" ? JSON.parse(rawResult.event_data) : rawResult.event_data
-        );
-        if (!_.isError(info) && info && _.isFinite(info.code))
-            return { code: info.code, message: info?.error_detail?.message || info.message || "" };
-        return { code: EX.API_REQUEST_FAILED[0] as number, message: "doubao返回未知错误" };
-    }
-    return null;
-}
-
 /**
  * 从流接收完整的消息内容
  *
