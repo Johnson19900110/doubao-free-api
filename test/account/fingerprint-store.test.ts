@@ -50,4 +50,25 @@ describe('FingerprintStore', () => {
     const store = new FingerprintStore(file, fakeGen);
     await expect(store.load()).resolves.toBeUndefined();
   });
+
+  it('load 丢弃结构残缺项,残缺 phone 重新生成', async () => {
+    // 手工写入:一条合法 + 两条残缺
+    await fs.writeFile(
+      file,
+      JSON.stringify({
+        good: { deviceId: '7111', webId: '7222' },
+        missingWebId: { deviceId: '7333' },
+        notObject: 'garbage',
+      })
+    );
+    const store = new FingerprintStore(file, fakeGen);
+    await store.load();
+
+    // 合法项原样保留
+    expect(store.getOrCreate('good')).toEqual({ deviceId: '7111', webId: '7222' });
+    // 残缺项被丢弃 → getOrCreate 重新生成一对
+    const rebuilt = store.getOrCreate('missingWebId');
+    expect(rebuilt.deviceId).toBe('7000000000000000001');
+    expect(rebuilt.webId).toBe('7000000000000000002');
+  });
 });

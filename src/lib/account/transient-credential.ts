@@ -1,5 +1,5 @@
-import util from "@/lib/util.ts";
 import { AccountCredential } from "@/lib/account/types.ts";
+import { generateFingerprintId } from "@/lib/account/fingerprint-id.ts";
 
 /**
  * 由裸 token 构造临时账号凭据
@@ -10,6 +10,5 @@ import { AccountCredential } from "@/lib/account/types.ts";
  * @param token 豆包 sessionid
  */
 export function buildTransientCredential(token: string): AccountCredential {
-    const gen = () => `7${util.generateRandomString({ length: 18, charset: "numeric" })}`;
-    return { token, deviceId: gen(), webId: gen() };
+    return { token, deviceId: generateFingerprintId(), webId: generateFingerprintId() };
 }

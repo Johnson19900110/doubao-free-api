@@ -35,10 +35,7 @@ export class AccountConfig {
       keys: _.defaultTo(auth?.keys, []),
     };
     this.pool = {
-      apiUrl: _.defaultTo(
-        process.env.DOUBAO_POOL_API_URL || pool?.apiUrl,
-        'http://10.0.8.73:8090/api/v1/external/doubao/logins'
-      ),
+      apiUrl: _.defaultTo(process.env.DOUBAO_POOL_API_URL || pool?.apiUrl, ''),
       apiToken: _.defaultTo(process.env.DOUBAO_POOL_API_TOKEN || pool?.apiToken, ''),
       pollInterval: _.defaultTo(pool?.pollInterval, 60000),
       requestInterval: _.defaultTo(pool?.requestInterval, 2000),

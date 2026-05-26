@@ -253,8 +253,8 @@ auth:
     - your-key-2
 # 账号池
 pool:
-  apiUrl: http://10.0.8.73:8090/api/v1/external/doubao/logins
-  apiToken: 84e45635ca92da89d3f609c7cfa8889a
+  apiUrl: <DOUBAO_POOL_API_URL>          # 建议用环境变量 DOUBAO_POOL_API_URL 覆盖
+  apiToken: <DOUBAO_POOL_API_TOKEN>      # 真实凭据勿入库,用环境变量 DOUBAO_POOL_API_TOKEN 覆盖
   pollInterval: 60000        # 轮询间隔 ms
   requestInterval: 2000      # 每账号最小请求间隔 ms(从上次结束算)
   rateLimitCooldown: 300000  # 限流冷却 ms(5min)
