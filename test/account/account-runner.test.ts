@@ -56,6 +56,23 @@ describe('account-runner', () => {
     expect(pool.released).toEqual([{ phone: 'a', outcome: 'success' }]);
   });
 
+  it('成功结果最外层附带 account(账号手机号)', async () => {
+    const pool = fakePool(['13800000000', 'b']);
+    const fn = vi.fn(async () => ({ code: 0, content: 'ok' }));
+    const r = await runNonStream(pool as any, fn);
+    expect(r.account).toBe('13800000000');
+  });
+
+  it('换号成功后 account 为最终成功账号', async () => {
+    const pool = fakePool(['a', 'b']);
+    const fn = vi
+      .fn()
+      .mockResolvedValueOnce({ code: RATE_LIMIT_CODE })
+      .mockResolvedValueOnce({ code: 0, content: 'ok' });
+    const r = await runNonStream(pool as any, fn);
+    expect(r.account).toBe('b');
+  });
+
   it('限流码触发换号重试', async () => {
     const pool = fakePool(['a', 'b']);
     const fn = vi

@@ -41,7 +41,7 @@ export async function runNonStream<T extends { code?: number; message?: string }
   pool: PoolLike,
   fn: (acc: Account) => Promise<T>,
   maxFailover = 3
-): Promise<T> {
+): Promise<T & { account: string }> {
   const maxAttempts = Math.min(maxFailover, Math.max(1, pool.size()));
   let lastErr: any;
   for (let i = 0; i < maxAttempts; i++) {
@@ -51,7 +51,8 @@ export async function runNonStream<T extends { code?: number; message?: string }
       const outcome = classifyRelease(result.code);
       if (outcome === 'success') {
         pool.release(acc, 'success');
-        return result;
+        // 在最外层标注本次请求实际使用的账号手机号
+        return { ...result, account: acc.phone };
       }
       // 限流(冷却)或风控(禁用):释放后换号重试
       pool.release(acc, outcome);
