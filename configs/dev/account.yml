@@ -1,0 +1,16 @@
+# 接入鉴权：客户端 Authorization: Bearer <key> 命中任一才放行
+auth:
+  keys:
+    - change-me-key-1
+    - change-me-key-2
+# 账号池
+pool:
+  # 外部账号接口(建议用环境变量 DOUBAO_POOL_API_URL 覆盖)
+  apiUrl: http://10.0.8.73:8090/api/v1/external/doubao/logins
+  # 调用上面接口的 Bearer(强烈建议改用环境变量 DOUBAO_POOL_API_TOKEN，勿长期硬编码)
+  apiToken: ''
+  pollInterval: 60000        # 轮询间隔 ms
+  requestInterval: 2000      # 每账号最小请求间隔 ms
+  rateLimitCooldown: 300000  # 限流冷却 ms(5min)
+  maxFailover: 3             # 单请求最大换号重试次数
+  fingerprintStore: ./data/fingerprints.json
