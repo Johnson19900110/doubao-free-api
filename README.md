@@ -12,9 +12,11 @@
 ## 目录
 
 * [免责声明](#免责声明)
-* [接入准备](#接入准备)
-  * [智能体接入](#智能体接入)
-  * [多账号接入](#多账号接入)
+* [账号池与接入鉴权](#账号池与接入鉴权)
+  * [接入鉴权](#接入鉴权)
+  * [账号池（token 来源）](#账号池token-来源)
+  * [调度与故障转移](#调度与故障转移)
+  * [账号状态查询](#账号状态查询)
 * [Docker部署](#Docker部署)
   * [Docker-compose部署](#Docker-compose部署)
 * [Render部署](#Render部署)
@@ -44,21 +46,74 @@
 
 **仅限自用，禁止对外提供服务或商用，避免对官方造成服务压力，否则风险自担！**
 
-## 接入准备
+## 账号池与接入鉴权
 
-从 [豆包](https://www.doubao.com/) 获取sessionid
+> 自本版本起，豆包账号 token **不再来自请求头**，而由服务统一从外部账号接口轮询维护；请求头里的 `Authorization` 改作**接入鉴权 key**。
 
-进入豆包登录账号，然后F12打开开发者工具，从Application > Cookies中找到`sessionid`的值，这将作为Authorization的Bearer Token值：`Authorization: Bearer sessionid`
+### 接入鉴权
 
-![example0](./doc/example-0.png)
+客户端调用任意接口时，需在请求头携带配置中的接入 key：
 
-### 多账号接入
+`Authorization: Bearer <你的接入key>`
 
-你可以通过提供多个账号的sessionid并使用`,`拼接提供：
+key 在 `configs/<env>/account.yml` 的 `auth.keys` 中维护，命中任一即放行，否则返回 `401`。默认环境 env 为 `dev`。
 
-`Authorization: Bearer sessionid1,sessionid2,sessionid3`
+```yaml
+# configs/dev/account.yml
+auth:
+  keys:
+    - change-me-key-1
+    - change-me-key-2
+```
 
-每次请求服务会从中挑选一个。
+### 账号池（token 来源）
+
+服务启动后会从外部账号接口拉取在线账号，并每分钟全量对齐一次（新增 / 移除 / token 更新）。接口约定：
+
+```
+GET <apiUrl>
+Authorization: Bearer <apiToken>
+
+返回：{"code":0,"message":"success","data":[{"phone":"...","token":"..."}, ...]}
+```
+
+`configs/<env>/account.yml` 的 `pool` 配置项：
+
+| 配置项 | 说明 | 默认 |
+| --- | --- | --- |
+| `apiUrl` | 外部账号接口地址 | — |
+| `apiToken` | 调用账号接口的 Bearer | 留空，改用环境变量 |
+| `pollInterval` | 轮询对齐间隔(ms) | `60000` |
+| `requestInterval` | 每账号最小请求间隔(ms，从上次请求结束计) | `2000` |
+| `rateLimitCooldown` | 触发限流后的冷却时长(ms) | `300000` |
+| `maxFailover` | 单次请求最大换号重试次数 | `3` |
+| `fingerprintStore` | 设备指纹持久化文件路径 | `./data/fingerprints.json` |
+
+**凭据安全**：`apiUrl` / `apiToken` 支持环境变量覆盖且优先级更高，**请勿在 `account.yml` 中硬编码真实 token**：
+
+```shell
+export DOUBAO_POOL_API_URL=http://10.0.8.73:8090/api/v1/external/doubao/logins
+export DOUBAO_POOL_API_TOKEN=<你的账号接口token>
+```
+
+**设备指纹**：每个账号的 `DEVICE_ID` / `WEB_ID` 在首次出现时生成并持久化到 `fingerprintStore`（默认 `./data/fingerprints.json`），重启后保持稳定；新账号实时补建。该目录下的运行时数据已被 `.gitignore` 忽略。
+
+### 调度与故障转移
+
+- 轮询挑号，命中后该账号置忙，避免并发重复选中；
+- 距上次请求结束不足 `requestInterval` 时自动补足等待；
+- 上游限流（code `710022002`）时换号重试，并对该账号冷却 `rateLimitCooldown`；二次触发则标记为 `disabled`；
+- 被禁用账号**不支持手动恢复**，仅当轮询发现其 token 变化（即重新登录）时才重新启用；
+- 全部账号不可用返回 `429`，账号池尚未就绪返回 `503`。
+
+### 账号状态查询
+
+```
+GET /accounts/status
+Authorization: Bearer <你的接入key>
+```
+
+返回账号池概览与各账号脱敏后的状态（`idle` / `inFlight` / `rateLimited` / `disabled`、限流计分、冷却到期时间等），用于运维观测。
 
 ## Docker部署
 
@@ -197,10 +252,10 @@ pm2 stop doubao-free-api
 
 **POST /v1/chat/completions**
 
-header 需要设置 Authorization 头部：
+header 需要设置 Authorization 头部为接入 key（详见[接入鉴权](#接入鉴权)）：
 
 ```
-Authorization: Bearer [sessionid]
+Authorization: Bearer [接入key]
 ```
 
 请求数据：

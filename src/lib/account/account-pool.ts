@@ -171,7 +171,9 @@ export class AccountPool {
 
 /** 调用外部账号接口,返回 RawAccount[];失败或非 0 code 抛错(交由 reconcile 保留旧池) */
 async function defaultFetchAccounts(): Promise<RawAccount[]> {
-  const { apiUrl, apiToken } = config.account.pool;
+  // 环境变量优先,避免在 account.yml 中硬编码真实凭据
+  const apiUrl = process.env.DOUBAO_POOL_API_URL || config.account.pool.apiUrl;
+  const apiToken = process.env.DOUBAO_POOL_API_TOKEN || config.account.pool.apiToken;
   const resp = await axios.get(apiUrl, {
     headers: { Authorization: `Bearer ${apiToken}` },
     timeout: 15000,
