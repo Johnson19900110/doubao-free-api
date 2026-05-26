@@ -9,4 +9,7 @@ export default {
     API_CONTENT_FILTERED: [-2006, '内容由于合规问题已被阻止生成'],
     API_IMAGE_GENERATION_FAILED: [-2007, '图像生成失败'],
     API_VIDEO_GENERATION_FAILED: [-2008, '视频生成失败'],
+    API_AUTH_FAILED: [-2010, '接入鉴权失败'],
+    API_NO_AVAILABLE_ACCOUNT: [-2011, '账号池暂时无可用账号'],
+    API_ACCOUNT_POOL_NOT_READY: [-2012, '账号池尚未就绪'],
 }
