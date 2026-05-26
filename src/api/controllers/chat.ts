@@ -194,10 +194,12 @@ async function createCompletion(
     refreshToken: string,
     assistantId = DEFAULT_ASSISTANT_ID,
     refConvId = "",
-    retryCount = 0
+    retryCount = 0,
+    useDeepThink = false,
+    useAutoCot = false
 ) {
     return (async () => {
-        logger.info(`收到 ${messages.length} 条消息`);
+        logger.info(`收到 ${messages.length} 条消息${useDeepThink ? " [深度思考]" : ""}${useAutoCot ? " [自动CoT]" : ""}`);
 
         const refFileUrls = extractRefFileUrls(messages);
         const refs = refFileUrls.length
@@ -220,8 +222,8 @@ async function createCompletion(
                     is_delete: false,
                     message_from: 0,
                     action_bar_skill_id: 0,
-                    use_deep_think: false,
-                    use_auto_cot: false,
+                    use_deep_think: useDeepThink,
+                    use_auto_cot: useAutoCot,
                     resend_for_regen: false,
                     enable_commerce_credit: false,
                     event_id: "0"
@@ -269,7 +271,9 @@ async function createCompletion(
                     refreshToken,
                     assistantId,
                     refConvId,
-                    retryCount + 1
+                    retryCount + 1,
+                    useDeepThink,
+                    useAutoCot
                 );
             })();
         }
@@ -290,10 +294,12 @@ async function createCompletionStream(
     refreshToken: string,
     assistantId = DEFAULT_ASSISTANT_ID,
     refConvId = "",
-    retryCount = 0
+    retryCount = 0,
+    useDeepThink = false,
+    useAutoCot = false
 ) {
     return (async () => {
-        logger.info(`收到 ${messages.length} 条消息（流式）`);
+        logger.info(`收到 ${messages.length} 条消息（流式）${useDeepThink ? " [深度思考]" : ""}${useAutoCot ? " [自动CoT]" : ""}`);
 
         const refFileUrls = extractRefFileUrls(messages);
         const refs = refFileUrls.length
@@ -316,8 +322,8 @@ async function createCompletionStream(
                     is_delete: false,
                     message_from: 0,
                     action_bar_skill_id: 0,
-                    use_deep_think: false,
-                    use_auto_cot: false,
+                    use_deep_think: useDeepThink,
+                    use_auto_cot: useAutoCot,
                     resend_for_regen: false,
                     enable_commerce_credit: false,
                     event_id: "0"
@@ -385,7 +391,9 @@ async function createCompletionStream(
                     refreshToken,
                     assistantId,
                     refConvId,
-                    retryCount + 1
+                    retryCount + 1,
+                    useDeepThink,
+                    useAutoCot
                 );
             })();
         }
@@ -1140,6 +1148,77 @@ function checkResult(result: AxiosResponse) {
     throw new APIException(EX.API_REQUEST_FAILED, `[请求doubao失败]: ${msg}`);
 }
 
+type Reference = { title: string; url: string; sitename?: string; logo_url?: string };
+
+function pickLogo(src: any): string | undefined {
+    const candidates = [src?.logo_url, src?.icon_url, src?.icon, src?.logo, src?.favicon];
+    for (const v of candidates) {
+        if (typeof v === "string" && v.trim()) return v;
+    }
+    return undefined;
+}
+
+function upsertReference(refs: Map<string, Reference>, ref: Reference) {
+    const existing = refs.get(ref.url);
+    if (!existing) { refs.set(ref.url, ref); return; }
+    if (!existing.sitename && ref.sitename) existing.sitename = ref.sitename;
+    if (!existing.logo_url && ref.logo_url) existing.logo_url = ref.logo_url;
+}
+
+function collectReferencesFromMessage(
+    message: any,
+    parsedContent: any,
+    refs: Map<string, Reference>
+) {
+    const ctype = message?.content_type;
+    if (ctype === 10025 && parsedContent && !_.isError(parsedContent) && Array.isArray((parsedContent as any).results)) {
+        for (const r of (parsedContent as any).results) {
+            const card = r?.text_card || r?.card || r;
+            const url = card?.url;
+            const title = card?.title;
+            if (!url || !title) continue;
+            upsertReference(refs, { title, url, sitename: card?.sitename, logo_url: pickLogo(card) });
+        }
+    }
+    if (Array.isArray(message?.meta_infos)) {
+        for (const meta of message.meta_infos) {
+            if (meta?.type !== 104) continue;
+            const info = _.attempt(() => typeof meta.info === "string" ? JSON.parse(meta.info) : meta.info);
+            if (_.isError(info) || !info) continue;
+            const url = (info as any).url;
+            const title = (info as any).title;
+            if (!url || !title) continue;
+            upsertReference(refs, { title, url, sitename: (info as any).website_name, logo_url: pickLogo(info) });
+        }
+    }
+}
+
+// 豆包未返回任何内容时使用的错误码
+const EMPTY_RESULT_CODE = -2009;
+const EMPTY_RESULT_MESSAGE = "doubao未返回任何内容";
+
+/**
+ * 解析豆包上游错误帧
+ *
+ * 错误码可能位于最外层 rawResult.code，或 event_type 2005 错误帧的 event_data 内层
+ * （如限流 710022002）。命中则返回 { code, message }，否则返回 null。
+ *
+ * @param rawResult 解析后的 SSE data 帧
+ */
+function parseUpstreamError(rawResult: any): { code: number; message: string } | null {
+    if (rawResult && _.isFinite(rawResult.code) && rawResult.code !== 0)
+        return { code: rawResult.code, message: rawResult.message || "" };
+    if (rawResult && rawResult.event_type === 2005) {
+        const info = _.attempt(() =>
+            typeof rawResult.event_data === "string" ? JSON.parse(rawResult.event_data) : rawResult.event_data
+        );
+        if (!_.isError(info) && info && _.isFinite(info.code))
+            return { code: info.code, message: info?.error_detail?.message || info.message || "" };
+        return { code: EX.API_REQUEST_FAILED[0] as number, message: "doubao返回未知错误" };
+    }
+    return null;
+}
+
 /**
  * 从流接收完整的消息内容
  *
@@ -1149,15 +1228,18 @@ async function receiveStream(stream: any): Promise<any> {
     let temp = Buffer.from('');
     const images: Array<{ key?: string; preview?: string; ori?: string; thumb?: string }> = [];
     const emittedImageKeys = new Set<string>();
+    const references = new Map<string, Reference>();
     return new Promise((resolve, reject) => {
-        const data = {
+        const data: any = {
             id: "",
             model: MODEL_NAME,
             object: "chat.completion",
+            // 0 表示正常；非 0 为豆包上游错误码（如限流 710022002）或空结果码
+            code: 0,
             choices: [
                 {
                     index: 0,
-                    message: {role: "assistant", content: ""},
+                    message: {role: "assistant", content: "", reasoning_content: "", citations: [] as Reference[]},
                     finish_reason: "stop",
                 },
             ],
@@ -1165,8 +1247,16 @@ async function receiveStream(stream: any): Promise<any> {
             created: util.unixTimestamp(),
         };
         let isEnd = false;
+        let finalized = false;
+        // 深度思考阶段标记：由 content_type 10040 的 finish_title 切换
+        let inThinking = false;
         const finalize = () => {
+            if (finalized) return;
+            finalized = true;
             data.choices[0].message.content = data.choices[0].message.content.replace(/\n$/, "");
+            const reasoning = (data.choices[0].message.reasoning_content || "").replace(/\n$/, "");
+            if (reasoning) data.choices[0].message.reasoning_content = reasoning;
+            else delete data.choices[0].message.reasoning_content;
             const imgs = images.filter(Boolean);
             if (imgs.length) {
                 const md = imgs
@@ -1178,6 +1268,12 @@ async function receiveStream(stream: any): Promise<any> {
                     .join("\n\n");
                 data.choices[0].message.content += (data.choices[0].message.content ? "\n\n" : "") + `【图片生成完成：共${imgs.length}张】\n` + md;
             }
+            data.choices[0].message.citations = [...references.values()];
+            // 豆包未返回任何内容且无上游错误码时，透出空结果码
+            if (data.code === 0 && !data.choices[0].message.content && imgs.length === 0) {
+                data.code = EMPTY_RESULT_CODE;
+                data.message = EMPTY_RESULT_MESSAGE;
+            }
         };
         const parser = createParser((event) => {
             try {
@@ -1185,8 +1281,16 @@ async function receiveStream(stream: any): Promise<any> {
                 const rawResult = _.attempt(() => JSON.parse(event.data));
                 if (_.isError(rawResult))
                     throw new Error(`Stream response invalid: ${event.data}`);
-                if (rawResult.code)
-                    throw new APIException(EX.API_REQUEST_FAILED, `[请求doubao失败]: ${rawResult.code}-${rawResult.message}`);
+                // 上游错误（限流/拦截等）不抛异常，而是把 code 透传到响应最外层
+                const upstreamErr = parseUpstreamError(rawResult);
+                if (upstreamErr) {
+                    logger.warn(`[upstream] doubao 返回错误码 ${upstreamErr.code}: ${upstreamErr.message}`);
+                    data.code = upstreamErr.code;
+                    data.message = upstreamErr.message;
+                    isEnd = true;
+                    finalize();
+                    return resolve(data);
+                }
                 if (rawResult.event_type == 2003) {
                     isEnd = true;
                     finalize();
@@ -1207,8 +1311,15 @@ async function receiveStream(stream: any): Promise<any> {
                 const message = result.message;
                 if (!message || !message.content)
                     return;
-                let text = "";
                 const parsed = _.attempt(() => JSON.parse(message.content));
+                // 深度思考分界标记（思考过程与答案均为 content_type 10000，仅靠 10040 区分）
+                if (message.content_type === 10040) {
+                    const title = (!_.isError(parsed) && parsed && typeof (parsed as any).finish_title === "string") ? (parsed as any).finish_title : "";
+                    if (title === "深度思考中") inThinking = true;
+                    else if (title === "已完成思考") inThinking = false;
+                    return;
+                }
+                let text = "";
                 if (!_.isError(parsed)) {
                     if (typeof parsed === "string") text = parsed;
                     else if (typeof parsed.text === "string") text = parsed.text;
@@ -1217,8 +1328,11 @@ async function receiveStream(stream: any): Promise<any> {
                 } else if (typeof message.content === "string") {
                     text = message.content;
                 }
-                if (text)
-                    data.choices[0].message.content += text;
+                if (text) {
+                    if (inThinking) data.choices[0].message.reasoning_content += text;
+                    else data.choices[0].message.content += text;
+                }
+                collectReferencesFromMessage(message, parsed, references);
                 const ctype = message.content_type;
                 if (ctype === 2074) {
                     const payload = _.isError(parsed) ? _.attempt(() => JSON.parse(message.content)) : parsed;
@@ -1272,8 +1386,61 @@ function createTransStream(stream: any, endCallback?: Function) {
     let temp = Buffer.from('');
     const created = util.unixTimestamp();
     let imageNoticeSent = false;
+    // 深度思考阶段标记：由 content_type 10040 的 finish_title 切换
+    let inThinking = false;
     const emittedImageKeys = new Set<string>();
+    const references = new Map<string, Reference>();
     const transStream = new PassThrough();
+    let referencesFlushed = false;
+    const flushReferences = () => {
+        if (referencesFlushed) return;
+        referencesFlushed = true;
+        if (!references.size) return;
+        transStream.write(`data: ${JSON.stringify({
+            id: convId,
+            model: MODEL_NAME,
+            object: "chat.completion.chunk",
+            choices: [
+                {
+                    index: 0,
+                    delta: {role: "assistant", content: "", citations: [...references.values()]},
+                    finish_reason: null,
+                },
+            ],
+            created,
+        })}\n\n`);
+    };
+    // 是否产出过任何内容（含思考/答案/图片），用于判断豆包是否空返回
+    let anyContent = false;
+    let finished = false;
+    /**
+     * 结束流：透出 code（0 正常；非 0 为豆包上游错误码或空结果码）后收尾
+     */
+    const finish = (code = 0, message = "") => {
+        if (finished) return;
+        finished = true;
+        flushReferences();
+        if (code === 0 && !anyContent) {
+            code = EMPTY_RESULT_CODE;
+            message = EMPTY_RESULT_MESSAGE;
+        }
+        if (code !== 0)
+            logger.warn(`[upstream] doubao 流式返回错误码 ${code}: ${message}`);
+        const chunk: any = {
+            id: convId,
+            model: MODEL_NAME,
+            object: "chat.completion.chunk",
+            code,
+            choices: [
+                {index: 0, delta: {role: "assistant", content: ""}, finish_reason: "stop"},
+            ],
+            created,
+        };
+        if (code !== 0) chunk.message = message;
+        !transStream.closed && transStream.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        !transStream.closed && transStream.end("data: [DONE]\n\n");
+        endCallback && endCallback(convId);
+    };
     !transStream.closed &&
     transStream.write(
         `data: ${JSON.stringify({
@@ -1296,26 +1463,12 @@ function createTransStream(stream: any, endCallback?: Function) {
             const rawResult = _.attempt(() => JSON.parse(event.data));
             if (_.isError(rawResult))
                 throw new Error(`Stream response invalid: ${event.data}`);
-            if (rawResult.code)
-                throw new APIException(EX.API_REQUEST_FAILED, `[请求doubao失败]: ${rawResult.code}-${rawResult.message}`);
-            if (rawResult.event_type == 2003) {
-                transStream.write(`data: ${JSON.stringify({
-                    id: convId,
-                    model: MODEL_NAME,
-                    object: "chat.completion.chunk",
-                    choices: [
-                        {
-                            index: 0,
-                            delta: {role: "assistant", content: ""},
-                            finish_reason: "stop"
-                        },
-                    ],
-                    created,
-                })}\n\n`);
-                !transStream.closed && transStream.end("data: [DONE]\n\n");
-                endCallback && endCallback(convId);
-                return;
-            }
+            // 上游错误（限流/拦截等）不抛异常，而是把 code 透传到最终 chunk 后收尾
+            const upstreamErr = parseUpstreamError(rawResult);
+            if (upstreamErr)
+                return finish(upstreamErr.code, upstreamErr.message);
+            if (rawResult.event_type == 2003)
+                return finish();
             if (rawResult.event_type != 2001) {
                 return;
             }
@@ -1324,31 +1477,23 @@ function createTransStream(stream: any, endCallback?: Function) {
                 throw new Error(`Stream response invalid: ${rawResult.event_data}`);
             if (!convId)
                 convId = result.conversation_id;
-            if (result.is_finish) {
-                transStream.write(`data: ${JSON.stringify({
-                    id: convId,
-                    model: MODEL_NAME,
-                    object: "chat.completion.chunk",
-                    choices: [
-                        {
-                            index: 0,
-                            delta: {role: "assistant", content: ""},
-                            finish_reason: "stop"
-                        },
-                    ],
-                    created,
-                })}\n\n`);
-                !transStream.closed && transStream.end("data: [DONE]\n\n");
-                endCallback && endCallback(convId);
-                return;
-            }
+            if (result.is_finish)
+                return finish();
             const message = result.message;
             if (!message || !message.content)
                 return;
 
             const content = _.attempt(() => JSON.parse(message.content));
+            collectReferencesFromMessage(message, content, references);
 
             const ctype = message.content_type;
+            // 深度思考分界标记（思考过程与答案均为 content_type 10000，仅靠 10040 区分）
+            if (ctype === 10040) {
+                const title = (!_.isError(content) && content && typeof (content as any).finish_title === "string") ? (content as any).finish_title : "";
+                if (title === "深度思考中") inThinking = true;
+                else if (title === "已完成思考") inThinking = false;
+                return;
+            }
             if (ctype === 2074 && !_.isError(content)) {
                 const creations = Array.isArray((content as any).creations) ? (content as any).creations : [];
                 if (!imageNoticeSent && creations.length) {
@@ -1375,6 +1520,7 @@ function createTransStream(stream: any, endCallback?: Function) {
                     const ori = img?.image_ori?.url || url;
                     if (key && url && !emittedImageKeys.has(key)) {
                         emittedImageKeys.add(key);
+                        anyContent = true;
                         const idx = emittedImageKeys.size;
                         const md = `![生成图片${idx}](${url})\n原图: ${ori}\n`;
                         transStream.write(`data: ${JSON.stringify({
@@ -1404,6 +1550,10 @@ function createTransStream(stream: any, endCallback?: Function) {
                 text = message.content;
             }
             if (text) {
+                anyContent = true;
+                const delta = inThinking
+                    ? {role: "assistant", reasoning_content: text}
+                    : {role: "assistant", content: text};
                 transStream.write(`data: ${JSON.stringify({
                     id: convId,
                     model: MODEL_NAME,
@@ -1411,7 +1561,7 @@ function createTransStream(stream: any, endCallback?: Function) {
                     choices: [
                         {
                             index: 0,
-                            delta: {role: "assistant", content: text},
+                            delta,
                             finish_reason: null,
                         },
                     ],
@@ -1420,7 +1570,7 @@ function createTransStream(stream: any, endCallback?: Function) {
             }
         } catch (err) {
             logger.error(err);
-            !transStream.closed && transStream.end("\n\n");
+            finish(EX.API_REQUEST_FAILED[0] as number, "stream parse error");
         }
     });
     stream.on("data", (buffer) => {
@@ -1434,14 +1584,8 @@ function createTransStream(stream: any, endCallback?: Function) {
         }
         parser.feed(buffer.toString());
     });
-    stream.once(
-        "error",
-        () => !transStream.closed && transStream.end("data: [DONE]\n\n")
-    );
-    stream.once(
-        "close",
-        () => !transStream.closed && transStream.end("data: [DONE]\n\n")
-    );
+    stream.once("error", () => finish(EX.API_REQUEST_FAILED[0] as number, "stream error"));
+    stream.once("close", () => finish());
     return transStream;
 }
 
