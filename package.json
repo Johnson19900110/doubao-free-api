@@ -15,7 +15,9 @@
   "scripts": {
     "dev": "tsup src/index.ts --format cjs,esm --sourcemap --dts --publicDir public --watch --onSuccess \"node --enable-source-maps --no-node-snapshot dist/index.js\"",
     "start": "node --enable-source-maps --no-node-snapshot dist/index.js",
-    "build": "tsup src/index.ts --format cjs,esm --sourcemap --dts --clean --publicDir public"
+    "build": "tsup src/index.ts --format cjs,esm --sourcemap --dts --clean --publicDir public",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "author": "Vinlic",
   "license": "ISC",
@@ -45,6 +47,7 @@
     "@types/lodash": "^4.14.202",
     "@types/mime": "^3.0.4",
     "tsup": "^8.0.2",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^2.1.0"
   }
 }
