@@ -56,15 +56,14 @@
 
 `Authorization: Bearer <你的接入key>`
 
-key 在 `configs/<env>/account.yml` 的 `auth.keys` 中维护，命中任一即放行，否则返回 `401`。默认环境 env 为 `dev`。
+key 命中任一即放行，否则返回 `401`。默认环境 env 为 `dev`。推荐用环境变量 `DOUBAO_AUTH_KEYS`(逗号分隔)注入,`account.yml` 的 `auth.keys` 保持 `[]`(env 优先于配置文件):
 
-```yaml
-# configs/dev/account.yml
-auth:
-  keys:
-    - change-me-key-1
-    - change-me-key-2
+```shell
+# .env(由 .env.example 复制,不入库)
+DOUBAO_AUTH_KEYS=sk-xxxx,sk-yyyy
 ```
+
+生成随机 key:`node -e "console.log('sk-'+require('crypto').randomBytes(24).toString('hex'))"`。也可直接写在 `configs/<env>/account.yml` 的 `auth.keys` 列表里(适合无 env 注入的场景,但真实 key 会随该文件入库,慎用)。
 
 ### 账号池（token 来源）
 

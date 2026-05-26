@@ -22,8 +22,16 @@ export interface AuthOptions {
   keys: string[];
 }
 
+/** 解析逗号分隔的环境变量为去空格、滤空的字符串数组 */
+function parseEnvList(value: string | undefined): string[] {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 /**
- * 账号池与接入鉴权配置。敏感值(apiToken)支持环境变量覆盖。
+ * 账号池与接入鉴权配置。敏感值(apiToken、auth.keys)支持环境变量覆盖且优先级更高。
  */
 export class AccountConfig {
   auth: AuthOptions;
@@ -31,8 +39,9 @@ export class AccountConfig {
 
   constructor(options?: any) {
     const { auth, pool } = options || {};
+    const envKeys = parseEnvList(process.env.DOUBAO_AUTH_KEYS);
     this.auth = {
-      keys: _.defaultTo(auth?.keys, []),
+      keys: envKeys.length > 0 ? envKeys : _.defaultTo(auth?.keys, []),
     };
     this.pool = {
       apiUrl: _.defaultTo(process.env.DOUBAO_POOL_API_URL || pool?.apiUrl, ''),

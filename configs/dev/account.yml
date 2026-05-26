@@ -1,8 +1,7 @@
 # 接入鉴权：客户端 Authorization: Bearer <key> 命中任一才放行
+# keys 留空，由环境变量 DOUBAO_AUTH_KEYS(逗号分隔)注入(见 .env.example)
 auth:
-  keys:
-    - change-me-key-1
-    - change-me-key-2
+  keys: []
 # 账号池
 pool:
   # 外部账号接口地址与 Bearer：均留空，由环境变量 DOUBAO_POOL_API_URL / DOUBAO_POOL_API_TOKEN 注入(见 .env.example)
