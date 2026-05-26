@@ -45,6 +45,7 @@ export default {
     FAILED_DEPENDENCY: 424,  //由于之前的某个请求发生的错误，导致当前请求失败，例如PROPPATCH
     UNORDERED_COLLECTION: 425,  //在WebDav Advanced Collections 草案中定义，但是未出现在《WebDAV 顺序集协议》（RFC 3658）中
     UPGRADE_REQUIRED: 426,  //客户端应当切换到TLS/1.0
+    TOO_MANY_REQUESTS: 429,  //用户在给定时间内发送了太多请求（限流）
     RETRY_WITH: 449,  //由微软扩展，代表请求应当在执行完适当的操作后进行重试
 
     INTERNAL_SERVER_ERROR: 500,  //服务器遇到了一个未曾预料的状况，导致了它无法完成对请求的处理。一般来说，这个问题都会在服务器的程序码出错时出现
