@@ -1044,10 +1044,7 @@ export class AccountConfig {
       keys: _.defaultTo(auth?.keys, []),
     };
     this.pool = {
-      apiUrl: _.defaultTo(
-        environment.envVars.DOUBAO_POOL_API_URL || pool?.apiUrl,
-        'http://10.0.8.73:8090/api/v1/external/doubao/logins'
-      ),
+      apiUrl: _.defaultTo(environment.envVars.DOUBAO_POOL_API_URL || pool?.apiUrl, ''),
       apiToken: _.defaultTo(environment.envVars.DOUBAO_POOL_API_TOKEN || pool?.apiToken, ''),
       pollInterval: _.defaultTo(pool?.pollInterval, 60000),
       requestInterval: _.defaultTo(pool?.requestInterval, 2000),
@@ -1102,9 +1099,8 @@ auth:
     - change-me-key-2
 # 账号池
 pool:
-  # 外部账号接口(建议用环境变量 DOUBAO_POOL_API_URL 覆盖)
-  apiUrl: http://10.0.8.73:8090/api/v1/external/doubao/logins
-  # 调用上面接口的 Bearer(强烈建议改用环境变量 DOUBAO_POOL_API_TOKEN，勿长期硬编码)
+  # 外部账号接口地址与 Bearer：均留空，由环境变量 DOUBAO_POOL_API_URL / DOUBAO_POOL_API_TOKEN 注入
+  apiUrl: ''
   apiToken: ''
   pollInterval: 60000        # 轮询间隔 ms
   requestInterval: 2000      # 每账号最小请求间隔 ms
