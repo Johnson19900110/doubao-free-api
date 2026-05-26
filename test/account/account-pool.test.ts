@@ -42,6 +42,12 @@ describe('AccountPool.reconcile', () => {
     expect(pool.size()).toBe(1);
   });
 
+  it('status 返回完整手机号(不打码)', async () => {
+    const { pool } = makePool({ accounts: [{ phone: '15009760064', token: 't1' }] });
+    await pool.reconcile();
+    expect(pool.status().accounts[0].phone).toBe('15009760064');
+  });
+
   it('消失账号(空闲)被移除', async () => {
     const h = makePool({ accounts: [{ phone: '111', token: 't1' }, { phone: '222', token: 't2' }] });
     await h.pool.reconcile();

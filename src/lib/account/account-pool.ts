@@ -5,7 +5,6 @@ import EX from '@/api/consts/exceptions.ts';
 import HTTP from '@/lib/http-status-codes.ts';
 import logger from '@/lib/logger.ts';
 import config from '@/lib/config.ts';
-import { maskPhone } from '@/lib/account/mask.ts';
 import { FingerprintStore } from '@/lib/account/fingerprint-store.ts';
 import {
   Account,
@@ -122,7 +121,7 @@ export class AccountPool {
       else if (a.inFlight) state = 'inFlight';
       else if (now < a.rateLimitUntil) state = 'rateLimited';
       else state = 'idle';
-      return { phone: maskPhone(a.phone), state, strikes: a.strikes, rateLimitUntil: a.rateLimitUntil };
+      return { phone: a.phone, state, strikes: a.strikes, rateLimitUntil: a.rateLimitUntil };
     });
     return {
       total: accounts.length,
