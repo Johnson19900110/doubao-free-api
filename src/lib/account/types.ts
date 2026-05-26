@@ -25,7 +25,7 @@ export interface Account extends AccountCredential {
 }
 
 /** 释放账号时的结果类型 */
-export type ReleaseOutcome = 'success' | 'rateLimited' | 'error';
+export type ReleaseOutcome = 'success' | 'rateLimited' | 'error' | 'disabled';
 
 /** 单账号状态视图(供状态接口) */
 export interface AccountStatusView {

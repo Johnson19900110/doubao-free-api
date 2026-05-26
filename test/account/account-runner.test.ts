@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { runNonStream, isRateLimitCode, RATE_LIMIT_CODE } from '@/api/controllers/account-runner.ts';
+import {
+  runNonStream,
+  isRateLimitCode,
+  isDisableCode,
+  RATE_LIMIT_CODE,
+  DISABLE_CODE,
+} from '@/api/controllers/account-runner.ts';
 
 function fakePool(accounts: string[]) {
   const released: Array<{ phone: string; outcome: string }> = [];
@@ -20,6 +26,26 @@ describe('account-runner', () => {
   it('isRateLimitCode 识别限流码', () => {
     expect(isRateLimitCode(RATE_LIMIT_CODE)).toBe(true);
     expect(isRateLimitCode(0)).toBe(false);
+  });
+
+  it('isDisableCode 识别风控禁用码', () => {
+    expect(isDisableCode(DISABLE_CODE)).toBe(true);
+    expect(isDisableCode(RATE_LIMIT_CODE)).toBe(false);
+    expect(isDisableCode(0)).toBe(false);
+  });
+
+  it('风控禁用码触发换号重试并按 disabled 释放', async () => {
+    const pool = fakePool(['a', 'b']);
+    const fn = vi
+      .fn()
+      .mockResolvedValueOnce({ code: DISABLE_CODE })
+      .mockResolvedValueOnce({ code: 0, content: 'ok' });
+    const r = await runNonStream(pool as any, fn);
+    expect(r.content).toBe('ok');
+    expect(pool.released).toEqual([
+      { phone: 'a', outcome: 'disabled' },
+      { phone: 'b', outcome: 'success' },
+    ]);
   });
 
   it('首个账号成功直接返回', async () => {

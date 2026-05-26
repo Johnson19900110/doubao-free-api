@@ -4,7 +4,7 @@ import Request from '@/lib/request/Request.ts';
 import Response from '@/lib/response/Response.ts';
 import chat from '@/api/controllers/chat.ts';
 import accountPool from '@/lib/account/account-pool.ts';
-import { runNonStream, isRateLimitCode, PreStreamError } from '@/api/controllers/account-runner.ts';
+import { runNonStream, classifyRelease, PreStreamError } from '@/api/controllers/account-runner.ts';
 import { assertAuth } from '@/lib/auth.ts';
 import config from '@/lib/config.ts';
 
@@ -36,7 +36,7 @@ export default {
                     try {
                         const s = await chat.createCompletionStream(
                             messages, acc, assistantId, convId, 0, useDeepThink, useAutoCot,
-                            (code: number) => accountPool.release(acc, isRateLimitCode(code) ? 'rateLimited' : 'success')
+                            (code: number) => accountPool.release(acc, classifyRelease(code))
                         );
                         return new Response(s, {
                             type: "text/event-stream",

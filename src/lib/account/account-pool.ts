@@ -163,6 +163,9 @@ export class AccountPool {
     if (outcome === 'success') {
       acc.strikes = 0;
       acc.errorCount = 0;
+    } else if (outcome === 'disabled') {
+      // 风控码(如 710022004 滑块验证):单次即禁用
+      acc.disabled = true;
     } else if (outcome === 'rateLimited') {
       acc.errorCount = 0; // 限流打断连续 error 计数
       acc.strikes += 1;

@@ -182,6 +182,15 @@ describe('AccountPool.release', () => {
     expect(h.pool.status().rateLimited).toBe(0);
   });
 
+  it("release('disabled') 单次即禁用并不再被选中", async () => {
+    const { pool } = makePool({ accounts: [{ phone: '111', token: 't1' }] });
+    await pool.reconcile();
+    const a = await pool.acquire();
+    pool.release(a, 'disabled');
+    expect(pool.status().disabled).toBe(1);
+    await expect(pool.acquire()).rejects.toMatchObject({ httpStatusCode: 429 });
+  });
+
   it('单次 error 不计限流 strike、不禁用', async () => {
     const { pool } = makePool({ accounts: [{ phone: '111', token: 't1' }] });
     await pool.reconcile();
