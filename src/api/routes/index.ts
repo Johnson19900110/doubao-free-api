@@ -6,6 +6,7 @@ import images from "./images.ts"
 import ping from "./ping.ts";
 import token from './token.js';
 import models from './models.ts';
+import accounts from './accounts.ts';
 
 export default [
     {
@@ -25,5 +26,6 @@ export default [
     images,
     ping,
     token,
-    models
+    models,
+    accounts
 ];
