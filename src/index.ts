@@ -6,6 +6,7 @@ import "@/lib/initialize.ts";
 import server from "@/lib/server.ts";
 import routes from "@/api/routes/index.ts";
 import logger from "@/lib/logger.ts";
+import { startAccountPool } from "@/lib/account/account-pool.ts";
 
 const startupTime = performance.now();
 
@@ -20,6 +21,8 @@ const startupTime = performance.now();
 
   server.attachRoutes(routes);
   await server.listen();
+
+  await startAccountPool();
 
   config.service.bindAddress &&
     logger.success("Service bind address:", config.service.bindAddress);
