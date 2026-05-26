@@ -210,7 +210,7 @@ assertAuth(request):
     if !config.auth.keys.includes(key): throw APIException(401, "无效的接入密钥")
 ```
 
-应用于:`/v1/chat/completions`、`/v1/images/generations`、`/accounts/status`、`/accounts/reset`。
+应用于:`/v1/chat/completions`、`/v1/images/generations`、`/accounts/status`。
 
 ## 6. 接口变更
 
@@ -239,14 +239,7 @@ assertAuth(request):
 
 手机号脱敏(中间 4 位打码)。`state` 由字段推导。
 
-`POST /accounts/reset`(需 auth key):手动恢复某账号。
-
-```json
-请求: { "phone": "15009760064" }
-响应: { "ok": true }
-```
-
-将该 phone 的 `disabled=false, strikes=0, rateLimitUntil=0`。phone 不存在返回 `ok:false`。
+说明:不提供手动恢复接口。被标记 `disabled` 的账号仅在轮询发现其 token 变化(重新登录)时自动恢复(见 §5.2)。
 
 ## 7. 配置
 
@@ -297,7 +290,7 @@ pool:
 - release:success 清零 strikes;首次限流设冷却;二次限流置 disabled;error 不计分。
 - 故障转移:非流式限流码换号重试;耗尽重试抛错;流式推流后不转移。
 - 鉴权:命中放行、未命中 401。
-- 状态 / reset 接口:脱敏、状态推导、reset 恢复。
+- 状态接口:脱敏、状态推导。
 
 集成测试:mock 豆包上游,验证 chat / images 端到端使用池中账号指纹。
 
@@ -312,5 +305,5 @@ pool:
 5. 启动接线(`index.ts` 初始化池 + 轮询)。
 6. 控制器签名改造(chat / images 用账号指纹)。
 7. 路由改造(鉴权 + acquire/release + 故障转移)。
-8. 新增 `accounts` 路由(status / reset)。
+8. 新增 `accounts` 路由(status)。
 9. 集成测试 + 文档(README 更新接入方式)。
