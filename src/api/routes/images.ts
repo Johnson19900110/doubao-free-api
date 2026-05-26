@@ -3,6 +3,10 @@ import _ from 'lodash';
 import Request from '@/lib/request/Request.ts';
 import Response from '@/lib/response/Response.ts';
 import images from '@/api/controllers/images.ts';
+import accountPool from '@/lib/account/account-pool.ts';
+import { runNonStream, isRateLimitCode, PreStreamError } from '@/api/controllers/account-runner.ts';
+import { assertAuth } from '@/lib/auth.ts';
+import config from '@/lib/config.ts';
 
 // 定义图片生成请求体的类型（可选，增强类型提示）
 interface ImageCompletionRequestBody {
@@ -35,12 +39,8 @@ export default {
                 .validate('headers.authorization', _.isString)
                 .validate('body.image', (v) => _.isUndefined(v) || _.isString(v)); // 参考图为可选字符串
 
-            // 2. 处理Token
-            const tokens = images.tokenSplit(request.headers.authorization);
-            const token = _.sample(tokens);
-            if (!token) {
-                throw new Error('无效的Authorization Token');
-            }
+            // 2. Authorization 作接入鉴权
+            assertAuth(request.headers.authorization);
 
             // 3. 解构参数：新增image字段
             const {
@@ -66,17 +66,38 @@ export default {
 
             // 6. 调用生成方法（传递referenceImage）
             if (stream) {
-                const s = await images.createImageCompletionStream(imageParams, token, assistantId);
-                return new Response(s, {
-                    type: "text/event-stream",
-                    headers: {
-                        "Cache-Control": "no-cache, no-transform",
-                        "Connection": "keep-alive",
-                        "X-Accel-Buffering": "no"
+                // 流式:仅推流前可换号
+                const maxAttempts = Math.min(config.account.pool.maxFailover, Math.max(1, accountPool.size()));
+                let lastErr: any;
+                for (let i = 0; i < maxAttempts; i++) {
+                    const acc = await accountPool.acquire();
+                    try {
+                        const s = await images.createImageCompletionStream(
+                            imageParams, acc, assistantId, 0,
+                            (code: number) => accountPool.release(acc, isRateLimitCode(code) ? 'rateLimited' : 'success')
+                        );
+                        return new Response(s, {
+                            type: "text/event-stream",
+                            headers: {
+                                "Cache-Control": "no-cache, no-transform",
+                                "Connection": "keep-alive",
+                                "X-Accel-Buffering": "no"
+                            }
+                        });
+                    } catch (err) {
+                        accountPool.release(acc, 'error');
+                        lastErr = err;
+                        if (err instanceof PreStreamError) continue; // 推流前失败,换号
+                        throw err;
                     }
-                });
+                }
+                throw lastErr;
             } else {
-                const result = await images.createImageCompletion(imageParams, token, assistantId);
+                const result = await runNonStream(
+                    accountPool,
+                    (acc) => images.createImageCompletion(imageParams, acc, assistantId),
+                    config.account.pool.maxFailover
+                );
                 return new Response(result);
             }
         }
