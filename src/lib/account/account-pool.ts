@@ -15,6 +15,9 @@ import {
   ReleaseOutcome,
 } from '@/lib/account/types.ts';
 
+/** 连续 error 达到此次数即禁用账号(与限流 strikes 独立计数) */
+const MAX_ERROR_STRIKES = 3;
+
 export interface FingerprintStoreLike {
   load(): Promise<void>;
   getOrCreate(phone: string): { deviceId: string; webId: string };
@@ -84,6 +87,7 @@ export class AccountPool {
           lastEndTime: 0,
           rateLimitUntil: 0,
           strikes: 0,
+          errorCount: 0,
           disabled: false,
           pendingRemoval: false,
         });
@@ -93,6 +97,7 @@ export class AccountPool {
           existing.token = token;
           existing.disabled = false;
           existing.strikes = 0;
+          existing.errorCount = 0;
           existing.rateLimitUntil = 0;
         }
       }
@@ -157,10 +162,16 @@ export class AccountPool {
     acc.lastEndTime = this.deps.now();
     if (outcome === 'success') {
       acc.strikes = 0;
+      acc.errorCount = 0;
     } else if (outcome === 'rateLimited') {
+      acc.errorCount = 0; // 限流打断连续 error 计数
       acc.strikes += 1;
       if (acc.strikes >= 2) acc.disabled = true;
       else acc.rateLimitUntil = this.deps.now() + this.deps.config.rateLimitCooldown;
+    } else {
+      // 'error':连续累计,满阈值即禁用
+      acc.errorCount += 1;
+      if (acc.errorCount >= MAX_ERROR_STRIKES) acc.disabled = true;
     }
     if (acc.pendingRemoval) {
       this.accounts.delete(acc.phone);

@@ -18,6 +18,8 @@ export interface Account extends AccountCredential {
   lastEndTime: number;
   rateLimitUntil: number;
   strikes: number;
+  /** 连续(非成功/非限流)错误计数,满阈值即禁用 */
+  errorCount: number;
   disabled: boolean;
   pendingRemoval: boolean;
 }

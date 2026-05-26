@@ -182,12 +182,35 @@ describe('AccountPool.release', () => {
     expect(h.pool.status().rateLimited).toBe(0);
   });
 
-  it('error 不计 strike', async () => {
+  it('单次 error 不计限流 strike、不禁用', async () => {
     const { pool } = makePool({ accounts: [{ phone: '111', token: 't1' }] });
     await pool.reconcile();
     const a = await pool.acquire();
     pool.release(a, 'error');
+    expect(pool.status().accounts[0].strikes).toBe(0);
     expect(pool.status().rateLimited).toBe(0);
+    expect(pool.status().disabled).toBe(0);
+  });
+
+  it('连续 3 次 error 标记 disabled', async () => {
+    const { pool } = makePool({ accounts: [{ phone: '111', token: 't1' }] });
+    await pool.reconcile();
+    for (let i = 0; i < 3; i++) {
+      const a = await pool.acquire();
+      pool.release(a, 'error');
+    }
+    expect(pool.status().disabled).toBe(1);
+  });
+
+  it('success 打断连续 error 计数', async () => {
+    const { pool } = makePool({ accounts: [{ phone: '111', token: 't1' }] });
+    await pool.reconcile();
+    // 2 次 error
+    for (let i = 0; i < 2; i++) { const a = await pool.acquire(); pool.release(a, 'error'); }
+    // 1 次 success 清零连续计数
+    const ok = await pool.acquire(); pool.release(ok, 'success');
+    // 再 2 次 error 仍不足 3 连续
+    for (let i = 0; i < 2; i++) { const a = await pool.acquire(); pool.release(a, 'error'); }
     expect(pool.status().disabled).toBe(0);
   });
 
