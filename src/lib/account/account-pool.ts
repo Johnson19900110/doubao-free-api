@@ -1,8 +1,12 @@
+import axios from 'axios';
+
 import APIException from '@/lib/exceptions/APIException.ts';
 import EX from '@/api/consts/exceptions.ts';
 import HTTP from '@/lib/http-status-codes.ts';
 import logger from '@/lib/logger.ts';
+import config from '@/lib/config.ts';
 import { maskPhone } from '@/lib/account/mask.ts';
+import { FingerprintStore } from '@/lib/account/fingerprint-store.ts';
 import {
   Account,
   AccountStatusView,
@@ -164,3 +168,46 @@ export class AccountPool {
     }
   }
 }
+
+/** 调用外部账号接口,返回 RawAccount[];失败或非 0 code 抛错(交由 reconcile 保留旧池) */
+async function defaultFetchAccounts(): Promise<RawAccount[]> {
+  const { apiUrl, apiToken } = config.account.pool;
+  const resp = await axios.get(apiUrl, {
+    headers: { Authorization: `Bearer ${apiToken}` },
+    timeout: 15000,
+    validateStatus: () => true,
+  });
+  const body = resp.data || {};
+  if (body.code !== 0) throw new Error(`账号接口返回 code=${body.code} msg=${body.message}`);
+  return Array.isArray(body.data) ? body.data : [];
+}
+
+const fingerprintStore = new FingerprintStore(config.account.pool.fingerprintStore);
+
+/** 应用级单例 */
+const accountPool = new AccountPool({
+  now: () => Date.now(),
+  sleep: (ms: number) => new Promise((r) => setTimeout(r, ms)),
+  fetchAccounts: defaultFetchAccounts,
+  fingerprintStore,
+  config: {
+    requestInterval: config.account.pool.requestInterval,
+    rateLimitCooldown: config.account.pool.rateLimitCooldown,
+    maxFailover: config.account.pool.maxFailover,
+  },
+});
+
+let pollTimer: NodeJS.Timeout | null = null;
+
+/** 启动:先读指纹文件,立即对齐一次,再起轮询 */
+export async function startAccountPool(): Promise<void> {
+  await fingerprintStore.load();
+  await accountPool.reconcile();
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(() => {
+    accountPool.reconcile().catch((err) => logger.error('账号池轮询失败:', err));
+  }, config.account.pool.pollInterval);
+  logger.success(`账号池启动,当前账号数 ${accountPool.size()}`);
+}
+
+export default accountPool;
