@@ -2,6 +2,7 @@ import APIException from '@/lib/exceptions/APIException.ts';
 import EX from '@/api/consts/exceptions.ts';
 import HTTP from '@/lib/http-status-codes.ts';
 import { Account, ReleaseOutcome } from '@/lib/account/types.ts';
+import { EMPTY_RESULT_CODE } from '@/lib/doubao/upstream-error.ts';
 
 /** 豆包上游限流码 */
 export const RATE_LIMIT_CODE = 710022002;
@@ -17,9 +18,16 @@ export function isDisableCode(code?: number): boolean {
   return code === DISABLE_CODE;
 }
 
-/** 把上游响应码归类为释放结果:风控码禁用、限流码冷却、其余按成功透传 */
+/**
+ * 空结果码(豆包流跑完但无内容):疑似软性风控,按风控同等处理(禁用+换号重试)。
+ */
+export function isEmptyResultCode(code?: number): boolean {
+  return code === EMPTY_RESULT_CODE;
+}
+
+/** 把上游响应码归类为释放结果:风控码/空结果禁用、限流码冷却、其余按成功透传 */
 export function classifyRelease(code?: number): ReleaseOutcome {
-  if (isDisableCode(code)) return 'disabled';
+  if (isDisableCode(code) || isEmptyResultCode(code)) return 'disabled';
   if (isRateLimitCode(code)) return 'rateLimited';
   return 'success';
 }
