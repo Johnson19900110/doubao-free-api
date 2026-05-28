@@ -22,10 +22,12 @@ export default {
             // Authorization 作接入鉴权
             assertAuth(request.headers.authorization);
 
-            const { model, conversation_id: convId, messages, stream, deep_think, auto_cot } = request.body;
+            const { model, conversation_id: convId, messages, stream, deep_think, auto_cot, platform } = request.body;
             const assistantId = /^[a-z0-9]{24,}$/.test(model) ? model : undefined;
             const useDeepThink = !!deep_think;
             const useAutoCot = !!auto_cot;
+            // 端标识:仅 "mobile" 命中手机 UA,其余(含未传)均按网页版处理
+            const platformSel = platform === "mobile" ? "mobile" : "web";
 
             if (stream) {
                 // 流式:仅推流前可换号
@@ -36,7 +38,8 @@ export default {
                     try {
                         const s = await chat.createCompletionStream(
                             messages, acc, assistantId, convId, 0, useDeepThink, useAutoCot,
-                            (code: number) => accountPool.release(acc, classifyRelease(code))
+                            (code: number) => accountPool.release(acc, classifyRelease(code)),
+                            platformSel
                         );
                         return new Response(s, {
                             type: "text/event-stream",
@@ -58,7 +61,7 @@ export default {
 
             return await runNonStream(
                 accountPool,
-                (acc) => chat.createCompletion(messages, acc, assistantId, convId, 0, useDeepThink, useAutoCot),
+                (acc) => chat.createCompletion(messages, acc, assistantId, convId, 0, useDeepThink, useAutoCot, platformSel),
                 config.account.pool.maxFailover
             );
         }

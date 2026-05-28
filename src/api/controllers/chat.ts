@@ -50,6 +50,15 @@ const FAKE_HEADERS = {
     "Sec-Fetch-Site": "same-origin",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 };
+// 手机端标记:仅覆盖以下 3 个头使请求看起来来自移动浏览器(device_platform 仍为 web)
+// 取值来自真实手机 H5 抓包
+const MOBILE_HEADERS = {
+    "Sec-Ch-Ua-Mobile": "?1",
+    "Sec-Ch-Ua-Platform": '"iOS"',
+    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1"
+};
+// 端平台标识
+type Platform = "web" | "mobile";
 // 文件最大大小
 const FILE_MAX_SIZE = 100 * 1024 * 1024;
 
@@ -94,7 +103,7 @@ function generateCookie(refreshToken: string) {
  * @param params 请求参数
  * @param headers 请求头
  */
-async function request(method: string, uri: string, account: AccountCredential, options: AxiosRequestConfig = {}) {
+async function request(method: string, uri: string, account: AccountCredential, options: AxiosRequestConfig = {}, platform: Platform = "web") {
     const token = account.token;
     const response = await axios.request({
         method,
@@ -119,6 +128,7 @@ async function request(method: string, uri: string, account: AccountCredential, 
         },
         headers: {
             ...FAKE_HEADERS,
+            ...(platform === "mobile" ? MOBILE_HEADERS : {}),
             Cookie: generateCookie(token),
             "X-Flow-Trace": `04-${util.uuid()}-${util.uuid().substring(0, 16)}-01`,
             ...(options.headers || {}),
@@ -187,10 +197,11 @@ async function createCompletion(
     refConvId = "",
     retryCount = 0,
     useDeepThink = false,
-    useAutoCot = false
+    useAutoCot = false,
+    platform: Platform = "web"
 ) {
     return (async () => {
-        logger.info(`收到 ${messages.length} 条消息${useDeepThink ? " [深度思考]" : ""}${useAutoCot ? " [自动CoT]" : ""}`);
+        logger.info(`收到 ${messages.length} 条消息${useDeepThink ? " [深度思考]" : ""}${useAutoCot ? " [自动CoT]" : ""}${platform === "mobile" ? " [手机端]" : ""}`);
 
         const refFileUrls = extractRefFileUrls(messages);
         const refs = refFileUrls.length
@@ -231,7 +242,7 @@ async function createCompletion(
             },
             timeout: 300000,
             responseType: "stream"
-        });
+        }, platform);
         if (response.headers["content-type"].indexOf("text/event-stream") == -1) {
             response.data.on("data", (buffer) => logger.error(buffer.toString()));
             throw new APIException(
@@ -264,7 +275,8 @@ async function createCompletion(
                     refConvId,
                     retryCount + 1,
                     useDeepThink,
-                    useAutoCot
+                    useAutoCot,
+                    platform
                 );
             })();
         }
@@ -288,10 +300,11 @@ async function createCompletionStream(
     retryCount = 0,
     useDeepThink = false,
     useAutoCot = false,
-    onEnd?: (code: number) => void
+    onEnd?: (code: number) => void,
+    platform: Platform = "web"
 ) {
     return (async () => {
-        logger.info(`收到 ${messages.length} 条消息（流式）${useDeepThink ? " [深度思考]" : ""}${useAutoCot ? " [自动CoT]" : ""}`);
+        logger.info(`收到 ${messages.length} 条消息（流式）${useDeepThink ? " [深度思考]" : ""}${useAutoCot ? " [自动CoT]" : ""}${platform === "mobile" ? " [手机端]" : ""}`);
 
         const refFileUrls = extractRefFileUrls(messages);
         const refs = refFileUrls.length
@@ -332,7 +345,7 @@ async function createCompletionStream(
             },
             timeout: 300000,
             responseType: "stream"
-        });
+        }, platform);
 
         if (response.headers["content-type"].indexOf("text/event-stream") == -1) {
             logger.error(
@@ -372,7 +385,8 @@ async function createCompletionStream(
                     retryCount + 1,
                     useDeepThink,
                     useAutoCot,
-                    onEnd
+                    onEnd,
+                    platform
                 );
             })();
         }
