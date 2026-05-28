@@ -10,12 +10,15 @@ export const RATE_LIMIT_CODE = 710022002;
 /** 豆包上游风控码(滑块验证等),命中即禁用该账号 */
 export const DISABLE_CODE = 710022004;
 
+/** 豆包账号失效码(user invalid / Invalid User ID),命中即禁用该账号 */
+export const USER_INVALID_CODE = 710012000;
+
 export function isRateLimitCode(code?: number): boolean {
   return code === RATE_LIMIT_CODE;
 }
 
 export function isDisableCode(code?: number): boolean {
-  return code === DISABLE_CODE;
+  return code === DISABLE_CODE || code === USER_INVALID_CODE;
 }
 
 /**

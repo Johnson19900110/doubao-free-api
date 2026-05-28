@@ -1197,8 +1197,6 @@ async function receiveStream(stream: any): Promise<any> {
     const images: Array<{ key?: string; preview?: string; ori?: string; thumb?: string }> = [];
     const emittedImageKeys = new Set<string>();
     const references = new Map<string, Reference>();
-    // [TEMP 诊断] 收集原始 SSE 帧,空结果时 dump 出来看豆包到底发了啥(验证后回退)
-    const rawFrames: string[] = [];
     return new Promise((resolve, reject) => {
         const data: any = {
             id: "",
@@ -1245,15 +1243,11 @@ async function receiveStream(stream: any): Promise<any> {
                 data.message = EMPTY_RESULT_MESSAGE;
                 // 与 710022004 同等纳入监控:打 warn,供日志/告警识别
                 logger.warn(`[upstream] doubao 返回错误码 ${EMPTY_RESULT_CODE}: ${EMPTY_RESULT_MESSAGE}`);
-                // [TEMP 诊断] dump 原始帧(回退时连同 rawFrames 收集一起删)
-                logger.warn(`[TEMP 空结果原始帧] 共 ${rawFrames.length} 帧:\n${rawFrames.slice(-50).join("\n")}`);
             }
         };
         const parser = createParser((event) => {
             try {
                 if (event.type !== "event" || isEnd) return;
-                // [TEMP 诊断] 留存原始帧(截断,避免超长),供空结果时回看
-                if (rawFrames.length < 200) rawFrames.push(String(event.data).slice(0, 1000));
                 const rawResult = _.attempt(() => JSON.parse(event.data));
                 if (_.isError(rawResult))
                     throw new Error(`Stream response invalid: ${event.data}`);
@@ -1365,8 +1359,6 @@ function createTransStream(stream: any, endCallback?: Function) {
     // 深度思考阶段标记：由 content_type 10040 的 finish_title 切换
     let inThinking = false;
     const emittedImageKeys = new Set<string>();
-    // [TEMP 诊断] 收集原始 SSE 帧,空结果时 dump(验证后回退)
-    const rawFrames: string[] = [];
     const references = new Map<string, Reference>();
     const transStream = new PassThrough();
     let referencesFlushed = false;
@@ -1401,8 +1393,6 @@ function createTransStream(stream: any, endCallback?: Function) {
         if (code === 0 && !anyContent) {
             code = EMPTY_RESULT_CODE;
             message = EMPTY_RESULT_MESSAGE;
-            // [TEMP 诊断] dump 原始帧(回退时连同 rawFrames 收集一起删)
-            logger.warn(`[TEMP 空结果原始帧] 共 ${rawFrames.length} 帧:\n${rawFrames.slice(-50).join("\n")}`);
         }
         if (code !== 0)
             logger.warn(`[upstream] doubao 流式返回错误码 ${code}: ${message}`);
@@ -1440,8 +1430,6 @@ function createTransStream(stream: any, endCallback?: Function) {
     const parser = createParser((event) => {
         try {
             if (event.type !== "event") return;
-            // [TEMP 诊断] 留存原始帧(截断),供空结果时回看
-            if (rawFrames.length < 200) rawFrames.push(String(event.data).slice(0, 1000));
             const rawResult = _.attempt(() => JSON.parse(event.data));
             if (_.isError(rawResult))
                 throw new Error(`Stream response invalid: ${event.data}`);

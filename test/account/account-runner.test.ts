@@ -3,9 +3,12 @@ import {
   runNonStream,
   isRateLimitCode,
   isDisableCode,
+  classifyRelease,
   RATE_LIMIT_CODE,
   DISABLE_CODE,
+  USER_INVALID_CODE,
 } from '@/api/controllers/account-runner.ts';
+import { EMPTY_RESULT_CODE } from '@/lib/doubao/upstream-error.ts';
 
 function fakePool(accounts: string[]) {
   const released: Array<{ phone: string; outcome: string }> = [];
@@ -28,10 +31,33 @@ describe('account-runner', () => {
     expect(isRateLimitCode(0)).toBe(false);
   });
 
-  it('isDisableCode 识别风控禁用码', () => {
+  it('isDisableCode 识别风控禁用码与账号失效码', () => {
     expect(isDisableCode(DISABLE_CODE)).toBe(true);
+    expect(isDisableCode(USER_INVALID_CODE)).toBe(true);
     expect(isDisableCode(RATE_LIMIT_CODE)).toBe(false);
     expect(isDisableCode(0)).toBe(false);
+  });
+
+  it('classifyRelease:禁用码/账号失效码/空结果码均归 disabled,限流归 rateLimited,其余 success', () => {
+    expect(classifyRelease(DISABLE_CODE)).toBe('disabled');
+    expect(classifyRelease(USER_INVALID_CODE)).toBe('disabled');
+    expect(classifyRelease(EMPTY_RESULT_CODE)).toBe('disabled');
+    expect(classifyRelease(RATE_LIMIT_CODE)).toBe('rateLimited');
+    expect(classifyRelease(0)).toBe('success');
+  });
+
+  it('空结果码触发换号重试并按 disabled 释放', async () => {
+    const pool = fakePool(['a', 'b']);
+    const fn = vi
+      .fn()
+      .mockResolvedValueOnce({ code: EMPTY_RESULT_CODE })
+      .mockResolvedValueOnce({ code: 0, content: 'ok' });
+    const r = await runNonStream(pool as any, fn);
+    expect(r.content).toBe('ok');
+    expect(pool.released).toEqual([
+      { phone: 'a', outcome: 'disabled' },
+      { phone: 'b', outcome: 'success' },
+    ]);
   });
 
   it('风控禁用码触发换号重试并按 disabled 释放', async () => {

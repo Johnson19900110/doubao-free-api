@@ -35,6 +35,21 @@ describe('parseUpstreamError', () => {
     expect(parseUpstreamError({ event_type: 2074 })).toBeNull();
   });
 
+  it('Internal/ErrorX 错误帧解析出内嵌数字码与人类可读消息(账号失效)', () => {
+    // 真实抓包:code 字段为字符串 "Internal",真实码 710012000 埋在 message 里
+    const frame = {
+      code: 'Internal',
+      message:
+        'ErrorX:code=710012000 stable=true isPeer=false peerStable=false message=[user invalid]\nchain=[\n(cause)0: Invalid User ID\n]',
+    };
+    expect(parseUpstreamError(frame)).toEqual({ code: 710012000, message: 'user invalid' });
+  });
+
+  it('ErrorX 帧无 message=[] 时回退到 cause 文本', () => {
+    const frame = { code: 'Internal', message: 'ErrorX:code=710099999\nchain=[\n(cause)0: Some Failure\n]' };
+    expect(parseUpstreamError(frame)).toEqual({ code: 710099999, message: 'Some Failure' });
+  });
+
   it('空结果常量导出正确', () => {
     expect(EMPTY_RESULT_CODE).toBe(-2009);
     expect(typeof EMPTY_RESULT_MESSAGE).toBe('string');

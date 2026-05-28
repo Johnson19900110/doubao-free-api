@@ -17,6 +17,16 @@ export const EMPTY_RESULT_MESSAGE = "doubao未返回任何内容";
 export function parseUpstreamError(rawResult: any): { code: number; message: string } | null {
     if (rawResult && _.isFinite(rawResult.code) && rawResult.code !== 0)
         return { code: rawResult.code, message: rawResult.message || "" };
+    // 形如 {code:"Internal", message:"ErrorX:code=710012000 ... message=[user invalid] ...(cause)0: Invalid User ID"}
+    // 的错误帧:code 字段是非数字字符串,真实数字码埋在 message 里,需单独解析,否则会被当成空结果。
+    if (rawResult && typeof rawResult.message === "string" && /ErrorX:code=\d+/.test(rawResult.message)) {
+        const codeMatch = rawResult.message.match(/code=(\d+)/);
+        const code = codeMatch ? Number(codeMatch[1]) : (EX.API_REQUEST_FAILED[0] as number);
+        const detailMatch = rawResult.message.match(/message=\[([^\]]*)\]/);
+        const causeMatch = rawResult.message.match(/\(cause\)\d+:\s*([^\n\]]+)/);
+        const message = (detailMatch && detailMatch[1]) || (causeMatch && causeMatch[1].trim()) || rawResult.message;
+        return { code, message };
+    }
     if (rawResult && rawResult.event_type === 2005) {
         const info = _.attempt(() =>
             typeof rawResult.event_data === "string" ? JSON.parse(rawResult.event_data) : rawResult.event_data
